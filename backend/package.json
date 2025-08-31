@@ -1,27 +1,37 @@
 {
-  "name": "the-defi-app",
+  "name": "defi-app-backend",
   "version": "1.0.0",
+  "description": "DeFi App Backend with Flash Loan Testing",
   "main": "index.js",
-  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "hardhat test",
+    "compile": "hardhat compile",
+    "node": "hardhat node",
+    "deploy": "hardhat run scripts/deploy.js --network localhost"
   },
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
     "@aave/core-v3": "^1.19.3",
-    "@openzeppelin/contracts": "^5.4.0",
-    "axios": "^1.11.0",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.1",
-    "ethers": "^6.15.0",
-    "express": "^5.1.0",
-    "nodemon": "^3.1.10",
-    "web3": "^4.16.0"
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "web3": "^4.2.2"
   },
   "devDependencies": {
-    "hardhat": "^3.0.3"
-  }
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "chai": "^4.3.10",
+    "ethers": "^6.8.1",
+    "hardhat": "^2.19.0"
+  },
+  "keywords": [
+    "defi",
+    "flash-loan",
+    "aave",
+    "hardhat",
+    "testing"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }

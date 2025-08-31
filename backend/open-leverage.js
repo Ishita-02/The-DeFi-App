@@ -3,7 +3,6 @@ import axios from "axios";
 import dotenv from "dotenv";
 import Web3 from "web3";
 import routerABI from "./abis/aave_v3_router.js";
-import multicallABI from "./abis/multicall_contract.js";
 import erc20ABI from "./abis/erc20.js";
 import flashloanReceiverABI from "./abis/flashloan_receiver.js";
 
@@ -17,7 +16,7 @@ const web3 = new Web3(new Web3.providers.HttpProvider(process.env.NODE_API));
 
 // Setup contract interfaces
 const routerIface = new web3.eth.Contract(routerABI);
-const multicallIface = new web3.eth.Contract(multicallABI);
+const erc20Iface = new web3.eth.Contract(erc20ABI);
 
 app.post("/open-position", async (req, res) => {
   const { collateral, coin, colAmount, coinAmount, userAddress } = req.body;
@@ -35,8 +34,8 @@ app.post("/open-position", async (req, res) => {
       inputToken: coin,
       outputToken: collateral,
       inputAmount: coinAmountBN.toString(),
-      userAddress: userAddress,
-      outputReceiver: userAddress,
+      userAddress: process.env.FLASHLOAN_RECEIVER_ADDRESS, // Receiver is our contract
+      outputReceiver: process.env.FLASHLOAN_RECEIVER_ADDRESS, // Output goes to our contract
       chainID: "ethereum",
       uniquePID: process.env.ROUTER_INTEGRATOR_PID,
       isPermit2: false,
@@ -62,28 +61,25 @@ app.post("/open-position", async (req, res) => {
   const swapCalldata = result.calldata;
   const routerAddress = result.router;
 
-  // 3. Encode Aave supply & borrow
-  const totalCollateral = BigInt(colAmountBN) + BigInt(effectiveOut);
-  const supplyCalldata = routerIface.methods
-    .supply(collateral, totalCollateral, userAddress, 0)
-    .encodeABI();
+  console.log("=== OPERATION DEBUGGING ===");
+  console.log("Router address:", routerAddress);
+  console.log("Swap calldata length:", swapCalldata.length);
+  console.log("Swap calldata (first 100 chars):", swapCalldata.substring(0, 100));
+  console.log("Base collateral amount:", colAmountBN.toString());
+  console.log("Expected swap output:", effectiveOut.toString());
+  console.log("=== END OPERATION DEBUGGING ===");
 
-  const premium = (coinAmountBN * BigInt(5)) / BigInt(10000); 
-  const repayAmount = coinAmountBN + premium;
-  const borrowCalldata = routerIface.methods
-    .borrow(coin, repayAmount.toString(), 2, 0, userAddress)
-    .encodeABI();
+  // 3. Encode parameters for the new contract approach
+  // The contract will execute: swap -> supply -> borrow -> repay
+  const params = web3.eth.abi.encodeParameters(
+    ['address', 'uint256', 'bytes'],
+    [collateral, colAmountBN, swapCalldata]
+  );
 
-  //   if (getHealthFactor(address(this)) >= minHealthFactor) { ... }
-
-  // 4. Bundle in multicall
-  const multicallData = multicallIface.methods
-    .aggregate([
-      [routerAddress, swapCalldata],
-      [process.env.AAVE_V3_ROUTER_ADDRESS, supplyCalldata],
-      [process.env.AAVE_V3_ROUTER_ADDRESS, borrowCalldata],
-    ])
-    .encodeABI();
+  console.log("=== PARAMETERS DEBUGGING ===");
+  console.log("Encoded parameters:", params);
+  console.log("Parameters length:", params.length);
+  console.log("=== END PARAMETERS DEBUGGING ===");
 
   const receiverIface = new web3.eth.Contract(
     flashloanReceiverABI,
@@ -92,15 +88,21 @@ app.post("/open-position", async (req, res) => {
 
   const startFlashLoanCalldata = receiverIface.methods
     .startFlashLoan(
-      coin,         
-      coinAmountBN,   
-      multicallData   
+      coin,         // asset to flash loan (DAI)
+      coinAmountBN, // amount to flash loan
+      params        // encoded parameters (collateral, baseAmount, swapCalldata)
     )
     .encodeABI();
 
-    console.log("calldata", multicallData);
+  console.log("Flash loan calldata:", startFlashLoanCalldata);
+  console.log("Complete transaction data:", {
+    from: userAddress,
+    to: process.env.FLASHLOAN_RECEIVER_ADDRESS,
+    input: startFlashLoanCalldata,
+    gas: "8000000"
+  });
 
-  // 5. Call Tenderly simulate
+  // 4. Call Tenderly simulate
   const tenderlyResp = await axios.post(
     `${process.env.TENDERLY_API_URL}/simulate`,
     {
@@ -118,6 +120,11 @@ app.post("/open-position", async (req, res) => {
   res.json({
     simulationUrl: tenderlyResp.data.simulation.public_url,
     swapOut: effectiveOut.toString(),
+    parameters: {
+      collateral: collateral,
+      baseAmount: colAmountBN.toString(),
+      swapCalldata: swapCalldata.substring(0, 100) + "..."
+    }
   });
 });
 

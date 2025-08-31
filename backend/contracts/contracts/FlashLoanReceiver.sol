@@ -7,16 +7,19 @@ import {IPool} from "@aave/core-v3/contracts/interfaces/IPool.sol";
 import {IFlashLoanSimpleReceiver} from "@aave/core-v3/contracts/flashloan/interfaces/IFlashLoanSimpleReceiver.sol";
 import {IPoolAddressesProvider} from "@aave/core-v3/contracts/interfaces/IPoolAddressesProvider.sol";
 
+
 contract FlashLoanReceiver is IFlashLoanSimpleReceiver {
     using SafeERC20 for IERC20;
 
     IPool public immutable lendingPool;
     IPoolAddressesProvider public immutable provider;
     address public immutable owner;
+    address public immutable multicallContract;
 
-    constructor(address _provider) {
+    constructor(address _provider, address _multicallContract) {
         provider = IPoolAddressesProvider(_provider);
         lendingPool = IPool(provider.getPool());
+        multicallContract = _multicallContract;
         owner = msg.sender;
     }
 
@@ -58,14 +61,29 @@ contract FlashLoanReceiver is IFlashLoanSimpleReceiver {
         require(msg.sender == address(lendingPool), "Caller not pool");
         require(initiator == address(this), "Bad initiator");
 
+        // Decode parameters - routerCalldata is the first and only parameter
         bytes memory routerCalldata = abi.decode(params, (bytes));
-
-        (bool ok, bytes memory result) = address(this).call(routerCalldata);
-        require(ok, string(result));
-
+        
+        // Decode the router calldata to get the actual parameters
+        (address router, address collateral, uint256 baseAmount, bytes memory swapCalldata) = abi.decode(routerCalldata, (address, address, uint256, bytes));
+        
+        // 1. Execute swap (router gets DAI from flash loan)
+        IERC20(asset).approve(router, amount);
+        (bool swapSuccess, ) = router.call(swapCalldata);
+        require(swapSuccess, "Swap failed");
+        
+        // 2. Supply base amount + swapped amount to Aave
+        uint256 swappedAmount = IERC20(collateral).balanceOf(address(this));
+        uint256 totalSupply = baseAmount + swappedAmount;
+        IERC20(collateral).approve(address(lendingPool), totalSupply);
+        lendingPool.supply(collateral, totalSupply, address(this), 0);
+        
+        // 3. Borrow DAI to repay flash loan and repay it
         uint256 totalDebt = amount + premium;
+        lendingPool.borrow(asset, totalDebt, 2, 0, address(this));
         IERC20(asset).approve(address(lendingPool), totalDebt);
-
+        
         return true;
-    }
+    }   
+
 }
