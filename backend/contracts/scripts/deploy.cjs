@@ -8,7 +8,7 @@ async function main() {
   const MULTICALL_CONTRACT = "0xca11bde05977b3631167028862be2a173976ca11";
 
   const FlashloanReceiver = await hre.ethers.getContractFactory("FlashLoanReceiver");
-  const contract = await FlashloanReceiver.deploy(AAVE_POOL, MULTICALL_CONTRACT);
+  const contract = await FlashloanReceiver.deploy(AAVE_POOL);
   await contract.waitForDeployment();
   console.log("contract", contract);
 

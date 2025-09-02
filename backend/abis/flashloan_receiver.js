@@ -11,6 +11,17 @@ const flashloanReceiverABI = [
       "type": "constructor"
     },
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "SafeERC20FailedOperation",
+      "type": "error"
+    },
+    {
       "inputs": [],
       "name": "ADDRESSES_PROVIDER",
       "outputs": [
@@ -89,6 +100,44 @@ const flashloanReceiverABI = [
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_collateral",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_baseAmount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_flashLoanAsset",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_flashLoanAmount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_router",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "_swapCalldata",
+          "type": "bytes"
+        }
+      ],
+      "name": "openLeveragedPosition",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "owner",
       "outputs": [
@@ -112,29 +161,6 @@ const flashloanReceiverABI = [
         }
       ],
       "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "asset",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "amount",
-          "type": "uint256"
-        },
-        {
-          "internalType": "bytes",
-          "name": "routerCalldata",
-          "type": "bytes"
-        }
-      ],
-      "name": "startFlashLoan",
-      "outputs": [],
-      "stateMutability": "nonpayable",
       "type": "function"
     }
   ]

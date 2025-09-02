@@ -19,113 +19,118 @@ const routerIface = new web3.eth.Contract(routerABI);
 const erc20Iface = new web3.eth.Contract(erc20ABI);
 
 app.post("/open-position", async (req, res) => {
-  const { collateral, coin, colAmount, coinAmount, userAddress } = req.body;
-  console.log("body", req.body);
+ try {
+    // === 1. SETUP CONNECTION TO YOUR TENDERLY FORK ===
+    const web3 = new Web3(process.env.DEVNET_URL);
+    
+    // Add the user's private key to a local wallet. This allows web3 to sign transactions.
+    const userAccount = web3.eth.accounts.privateKeyToAccount(process.env.PRIVATE_KEY);
+    web3.eth.accounts.wallet.add(userAccount);
+    
+    const userAddress = userAccount.address;
+    console.log("Operating on behalf of user:", userAddress);
 
-  const coinDecimals = await getTokenDecimals(coin);
-  const collateralDecimals = await getTokenDecimals(collateral);
-  const coinAmountBN = BigInt((BigInt(coinAmount) * BigInt(10 ** coinDecimals)).toString());
-  const colAmountBN = BigInt((BigInt(colAmount) * BigInt(10 ** collateralDecimals)).toString());
+    // === 3. GET SWAP CALLDATA (This part remains the same) ===
+    const { collateral, coin, colAmount, coinAmount } = req.body;
+    const coinDecimals = await getTokenDecimals(coin);
+    const collateralDecimals = await getTokenDecimals(collateral);
+    const coinAmountBN = BigInt(coinAmount * 10 ** coinDecimals);
+    const colAmountBN = BigInt(colAmount * 10 ** collateralDecimals);
 
-  // 1. Call router API to get swap output
-  const routerResp = await axios.post(
+    console.log(`Checking allowance for ${colAmount} of ${collateral}...`);
+    const tokenContract = new web3.eth.Contract(erc20ABI, collateral);
+    const spenderAddress = process.env.FLASHLOAN_RECEIVER_ADDRESS;
+    
+    const currentAllowance = await tokenContract.methods.allowance(userAddress, spenderAddress).call();
+    console.log(`Current allowance is: ${currentAllowance}`);
+
+    // Compare BigInts to avoid precision issues
+    if (BigInt(currentAllowance) < colAmountBN) {
+      console.log("Allowance is too low. Sending approve transaction...");
+      const maxUint256 = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
+      const approveMethod = tokenContract.methods.approve(spenderAddress, maxUint256);
+      
+      const gas = await approveMethod.estimateGas({ from: userAddress });
+      const approveReceipt = await approveMethod.send({ from: userAddress, gas });
+
+      console.log(`Approval successful! Tx Hash: ${approveReceipt.transactionHash}`);
+    } else {
+      console.log("Allowance is sufficient. No approval needed.");
+    }
+    
+
+    const routerResp = await axios.post(
     process.env.ROUTER_URL,
     {
       inputToken: coin,
       outputToken: collateral,
       inputAmount: coinAmountBN.toString(),
-      userAddress: process.env.FLASHLOAN_RECEIVER_ADDRESS, // Receiver is our contract
-      outputReceiver: process.env.FLASHLOAN_RECEIVER_ADDRESS, // Output goes to our contract
+      userAddress: "0x2EEF625EBf5f20eDf0D858E30d73b4321E6E5Eaa", 
+      outputReceiver: "0x2EEF625EBf5f20eDf0D858E30d73b4321E6E5Eaa", 
       chainID: "ethereum",
       uniquePID: process.env.ROUTER_INTEGRATOR_PID,
       isPermit2: false,
+      computeEstimate: true
     },
     {
       headers: { "x-api-key": process.env.ROUTER_API_KEY },
     }
   );
 
-  if (routerResp.data.statusCode == 400) {
-    res.json({
-      message: routerResp.data.error,
-    });
-    return;
+  if (routerResp.data.statusCode === 400) {
+    return res.json({ message: routerResp.data.error });
   }
 
-  console.log("router response", routerResp.data.result);
-  let result = routerResp.data.result
+    const result = routerResp.data.result; 
 
-  const effectiveOut = result.effectiveOutputAmount; // collateral gained from swap
+    const routerAddress = result.router;
+    const swapCalldata = result.calldata;
 
-  // 2. Encode swap calldata from router response
-  const swapCalldata = result.calldata;
-  const routerAddress = result.router;
 
-  console.log("=== OPERATION DEBUGGING ===");
-  console.log("Router address:", routerAddress);
-  console.log("Swap calldata length:", swapCalldata.length);
-  console.log("Swap calldata (first 100 chars):", swapCalldata.substring(0, 100));
-  console.log("Base collateral amount:", colAmountBN.toString());
-  console.log("Expected swap output:", effectiveOut.toString());
-  console.log("=== END OPERATION DEBUGGING ===");
+    // === 4. PREPARE AND SEND THE REAL TRANSACTION ===
+    const flashloanContract = new web3.eth.Contract(
+        flashloanReceiverABI,
+        "0x2EEF625EBf5f20eDf0D858E30d73b4321E6E5Eaa"
+    );
+    
+    // Build the transaction object
+    const openPositionMethod = flashloanContract.methods.openLeveragedPosition(
+        collateral,
+        colAmountBN,
+        coin,
+        coinAmountBN,
+        routerAddress,
+        swapCalldata
+    );
 
-  // 3. Encode parameters for the new contract approach
-  // The contract will execute: swap -> supply -> borrow -> repay
-  const params = web3.eth.abi.encodeParameters(
-    ['address', 'uint256', 'bytes'],
-    [collateral, colAmountBN, swapCalldata]
-  );
+    // Estimate gas for the transaction
+    // const estimatedGas = await openPositionMethod.estimateGas({ from: userAddress });
+    // console.log(`Estimated gas: ${estimatedGas}`);
 
-  console.log("=== PARAMETERS DEBUGGING ===");
-  console.log("Encoded parameters:", params);
-  console.log("Parameters length:", params.length);
-  console.log("=== END PARAMETERS DEBUGGING ===");
+    console.log("Sending transaction to open leveraged position");
+    const receipt = await openPositionMethod.send({
+        from: userAddress
+    });
 
-  const receiverIface = new web3.eth.Contract(
-    flashloanReceiverABI,
-    process.env.FLASHLOAN_RECEIVER_ADDRESS
-  );
+    console.log("Transaction mined successfully!");
 
-  const startFlashLoanCalldata = receiverIface.methods
-    .startFlashLoan(
-      coin,         // asset to flash loan (DAI)
-      coinAmountBN, // amount to flash loan
-      params        // encoded parameters (collateral, baseAmount, swapCalldata)
-    )
-    .encodeABI();
+    // const tenderlyTxUrl = `https://dashboard.tenderly.co/account/{your-username}/project/{your-project}/fork/{your-fork-id}/transaction/${receipt.transactionHash}`;
+    
+    res.json({
+        message: "Transaction successful!",
+        transactionHash: receipt.transactionHash
+    });
 
-  console.log("Flash loan calldata:", startFlashLoanCalldata);
-  console.log("Complete transaction data:", {
-    from: userAddress,
-    to: process.env.FLASHLOAN_RECEIVER_ADDRESS,
-    input: startFlashLoanCalldata,
-    gas: "8000000"
-  });
-
-  // 4. Call Tenderly simulate
-  const tenderlyResp = await axios.post(
-    `${process.env.TENDERLY_API_URL}/simulate`,
-    {
-      network_id: "1",
-      from: userAddress,
-      to: process.env.FLASHLOAN_RECEIVER_ADDRESS,
-      input: startFlashLoanCalldata,
-      gas: "8000000"
-    },
-    {
-      headers: { "X-Access-Key": process.env.TENDERLY_ACCESS_KEY },
-    }
-  );
-
-  res.json({
-    simulationUrl: tenderlyResp.data.simulation.public_url,
-    swapOut: effectiveOut.toString(),
-    parameters: {
-      collateral: collateral,
-      baseAmount: colAmountBN.toString(),
-      swapCalldata: swapCalldata.substring(0, 100) + "..."
-    }
-  });
+} catch (error) {
+    console.error("--- TRANSACTION FAILED ---");
+    // Web3.js often wraps the revert reason in a nested object
+    const reason = error.innerError ? error.innerError.message : error.message;
+    console.error("Error Reason:", reason);
+    res.status(500).json({
+        message: "An error occurred while sending the transaction.",
+        error: reason,
+    });
+}
 });
 
 async function getTokenDecimals(token) {
